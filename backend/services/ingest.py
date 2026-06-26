@@ -1,53 +1,99 @@
-from db.chroma import get_collection
-from db import Memory, get_db
-from openai import OpenAI
-from datetime import datetime
+from chromadb.errors import InvalidArgumentError
+from sqlalchemy.orm import Session
 import uuid
 
-client = OpenAI()  # reads OPENAI_API_KEY from env
+from backend.db.chroma import get_collection
+from backend.db.db import Memory, SessionLocal
+from backend.services.embeddings import embed
+from backend.util.memory import classify_memory_type, emotional_weight
 
-def embed(text: str) -> list[float]:
-    resp = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text
-    )
-    return resp.data[0].embedding
+def chunk_text(text: str, max_chars: int = 260) -> list[str]:
+    """Paragraph-first chunking to reduce mixed memory types per chunk."""
+    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+    chunks: list[str] = []
 
-def chunk_text(text: str, max_chars: int = 400) -> list[str]:
-    """Naive sentence-aware chunker. Swap for semantic later."""
-    sentences = text.replace("\n", " ").split(". ")
-    chunks, current = [], ""
-    for s in sentences:
-        if len(current) + len(s) < max_chars:
-            current += s + ". "
-        else:
-            if current:
+    for paragraph in paragraphs:
+        if len(paragraph) <= max_chars:
+            chunks.append(paragraph)
+            continue
+
+        sentences = [s.strip() for s in paragraph.split(".") if s.strip()]
+        current = ""
+        for sentence in sentences:
+            candidate = f"{sentence}."
+            if len(candidate) > max_chars:
+                if current:
+                    chunks.append(current.strip())
+                    current = ""
+                chunks.append(candidate[:max_chars].strip())
+                continue
+
+            if not current:
+                current = candidate
+            elif len(current) + 1 + len(candidate) <= max_chars:
+                current = f"{current} {candidate}"
+            else:
                 chunks.append(current.strip())
-            current = s + ". "
-    if current:
-        chunks.append(current.strip())
+                current = candidate
+
+        if current:
+            chunks.append(current.strip())
+
     return chunks
 
-def ingest(content: str, memory_type: str = "fact", importance: float = 1.0):
+def ingest(
+    content: str,
+    memory_type: str = "auto",
+    importance: float = 1.0,
+    db: Session | None = None,
+):
     collection = get_collection()
     chunks = chunk_text(content)
+    owns_session = db is None
+    session = db or SessionLocal()
 
-    for chunk in chunks:
-        embedding_id = str(uuid.uuid4())
-        vec = embed(chunk)
+    try:
+        for chunk in chunks:
+            embedding_id = str(uuid.uuid4())
+            vec = embed(chunk)
+            resolved_type, confidence = classify_memory_type(chunk, requested_type=memory_type)
+            emo_weight = emotional_weight(chunk)
 
-        collection.add(
-            ids=[embedding_id],
-            embeddings=[vec],
-            documents=[chunk],
-            metadatas=[{"type": memory_type, "importance": importance}]
-        )
+            try:
+                collection.add(
+                    ids=[embedding_id],
+                    embeddings=[vec],
+                    documents=[chunk],
+                    metadatas=[
+                        {
+                            "id": embedding_id,
+                            "type": resolved_type,
+                            "importance": importance,
+                            "confidence": confidence,
+                            "emotional_weight": emo_weight,
+                        }
+                    ],
+                )
+            except InvalidArgumentError as exc:
+                if "dimension" in str(exc).lower():
+                    raise RuntimeError(
+                        "Embedding dimension mismatch. Your existing Chroma collection was created with a "
+                        "different embedding model. Re-run with --reset-chroma to rebuild the vector store."
+                    ) from exc
+                raise
+            session.add(
+                Memory(
+                    content=chunk,
+                    type=resolved_type,
+                    importance=importance,
+                    confidence=confidence,
+                    emotional_weight=emo_weight,
+                    embedding_id=embedding_id,
+                )
+            )
 
-        memory = Memory(
-            content=chunk,
-            type=memory_type,
-            importance=importance,
-            embedding_id=embedding_id
-        )
-        next(get_db()).add(memory)
-        next(get_db()).commit()
+        session.commit()
+        return len(chunks)
+    finally:
+        if owns_session:
+            session.close()

@@ -1,9 +1,19 @@
-from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, Text
-from sqlalchemy.orm import DeclarativeBase, Session
-from datetime import datetime
+import os
 import uuid
+from datetime import datetime
+from pathlib import Path
 
-engine = create_engine("sqlite:///twin.db")
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_engine, text
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "twin.db"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH.as_posix()}")
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 class Base(DeclarativeBase): 
     pass
@@ -15,6 +25,7 @@ class Memory(Base):
     content       = Column(Text)
     importance    = Column(Float, default=1.0)
     confidence    = Column(Float, default=1.0)
+    emotional_weight = Column(Float, default=0.0)
     access_count  = Column(Integer, default=0)
     created_at    = Column(DateTime, default=datetime.utcnow)
     last_accessed = Column(DateTime, default=datetime.utcnow)
@@ -35,6 +46,21 @@ class Conversation(Base):
 
 Base.metadata.create_all(engine)
 
+
+def _ensure_sqlite_columns() -> None:
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        columns = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(memories)"))
+        }
+        if "emotional_weight" not in columns:
+            conn.execute(text("ALTER TABLE memories ADD COLUMN emotional_weight FLOAT DEFAULT 0.0"))
+
+
+_ensure_sqlite_columns()
+
 def get_db():
-    with Session(engine) as session:
+    with SessionLocal() as session:
         yield session

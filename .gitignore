@@ -1,3 +1,6 @@
 .venv
 *.db
 chroma_store
+*.txt
+.env
+__pycache__/
