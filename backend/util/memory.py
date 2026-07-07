@@ -7,7 +7,7 @@ _GOAL_HINTS = re.compile(
     re.IGNORECASE,
 )
 _PREFERENCE_HINTS = re.compile(
-    r"\b(i like|i love|i prefer|favorite|i dislike|i hate|i enjoy)\b",
+    r"\b(i like|i love|i prefer|favorite|i dislike|i hate|i enjoy |i prefer)\b",
     re.IGNORECASE,
 )
 _EVENT_HINTS = re.compile(
@@ -19,8 +19,8 @@ _STYLE_HINTS = re.compile(
     re.IGNORECASE,
 )
 
-_EMOTION_POS = re.compile(r"\b(love|excited|happy|grateful|proud)\b", re.IGNORECASE)
-_EMOTION_NEG = re.compile(r"\b(stressed|anxious|sad|angry|worried|upset)\b", re.IGNORECASE)
+_EMOTION_POS = re.compile(r"\b(love|excited|happy|grateful|proud|correct)\b", re.IGNORECASE)
+_EMOTION_NEG = re.compile(r"\b(stressed|anxious|sad|angry|worried|upset|fuck|shit)\b", re.IGNORECASE)
 
 
 def classify_memory_type(text: str, requested_type: str = "auto") -> tuple[str, float]:

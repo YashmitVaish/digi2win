@@ -8,7 +8,7 @@ You have persistent memory of the user's goals, preferences, and life.
 Answer based on the retrieved context. If context is missing, say so honestly.
 Never make up facts about the user."""
 
-def build_context_bundle(query: str, db: Session) -> str:
+def build_context_bundle(query: str, db: Session, session_id: str | None = None) -> str:
     memories = retrieve(query, top_k=5, db=db)
 
     profile = db.query(Profile).all()
@@ -23,12 +23,11 @@ def build_context_bundle(query: str, db: Session) -> str:
     )
     recent_events_str = "\n".join(f"- {event.content}" for event in recent_events)
 
-    recent_turns = (
-        db.query(Conversation)
-        .order_by(Conversation.created_at.desc())
-        .limit(6)
-        .all()
-    )
+    turns_query = db.query(Conversation)
+    if session_id:
+        turns_query = turns_query.filter(Conversation.session_id == session_id)
+
+    recent_turns = turns_query.order_by(Conversation.created_at.desc()).limit(6).all()
     recent_turns.reverse()
     recent_turns_str = "\n".join(f"- {turn.role}: {turn.content}" for turn in recent_turns)
 
